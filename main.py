@@ -327,7 +327,7 @@ def map_site(sites):
         for site in sites
     ]
 
-def map_recipe(recipe, event_id=None):
+def map_recipe(recipe, event_id=" "):
     try:
         denormalized_recipe_id = recipe.get("denormalizedRecipeId")
 
@@ -343,9 +343,9 @@ def map_recipe(recipe, event_id=None):
             recipe.get("filter")
         )
 
-        current_timestamp = format_bq_timestamp(datetime.now(timezone.utc).isoformat(
+        current_timestamp = datetime.now(timezone.utc).isoformat(
             timespec="milliseconds"
-        ).replace("+00:00", "Z"))
+        ).replace("+00:00", "Z")
 
         return True, {
             "business_unit_id": recipe.get("businessUnitId"),
@@ -365,15 +365,11 @@ def map_recipe(recipe, event_id=None):
             "user_created": recipe.get("userCreated"),
             "user_updated": recipe.get("userUpdated"),
 
-            "date_created": format_bq_timestamp(
-                recipe.get("dateCreated")
-            ),
-            "date_updated": format_bq_timestamp(
-                recipe.get("dateUpdated")
-            ),
+            "date_created": recipe.get("dateCreated"),
+            "date_updated": recipe.get("dateUpdated"),
 
-            "etl_date_created": format_bq_timestamp(current_timestamp),
-            "etl_date_updated": format_bq_timestamp(current_timestamp),
+            "etl_date_created": current_timestamp,
+            "etl_date_updated": current_timestamp,
 
             "is_deleted": "false",
 
@@ -619,7 +615,7 @@ def main():
     logger.info(f"discrepancies stored to {discrepancy_file_name}")
 
     recipe_bq_insertion_list = []
-    for row in discrepancy.slice(1, 1).iter_rows(named=True):
+    for row in discrepancy.slice(0, 1).iter_rows(named=True):
         rec_payload = row['recipe_payload']
         rec_payload_dict = json.loads(rec_payload)
         status, rec_pl = map_recipe(rec_payload_dict)
