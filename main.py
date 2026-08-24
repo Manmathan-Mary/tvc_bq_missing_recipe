@@ -515,6 +515,7 @@ def load_nested_json(project_id, from_local_file=True, file_path=None, bucket_na
         bigquery.SchemaField('date_updated', 'TIMESTAMP', mode='REQUIRED'),
         bigquery.SchemaField('etl_date_created', 'TIMESTAMP', mode='REQUIRED'),
         bigquery.SchemaField('etl_date_updated', 'TIMESTAMP', mode='REQUIRED'),
+        bigquery.SchemaField('is_deleted', 'BOOLEAN', mode='REQUIRED')
     ]
 
     job_config.source_format = bigquery.SourceFormat.NEWLINE_DELIMITED_JSON
@@ -615,7 +616,7 @@ def main():
     logger.info(f"discrepancies stored to {discrepancy_file_name}")
 
     recipe_bq_insertion_list = []
-    for row in discrepancy.slice(0, 1).iter_rows(named=True):
+    for row in discrepancy.iter_rows(named=True):
         rec_payload = row['recipe_payload']
         rec_payload_dict = json.loads(rec_payload)
         status, rec_pl = map_recipe(rec_payload_dict)
