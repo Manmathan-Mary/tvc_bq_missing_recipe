@@ -1,4 +1,6 @@
 import argparse
+from pathlib import Path
+
 import yaml
 import json
 
@@ -75,6 +77,22 @@ def get_recipe_bq_data(project_id: str):
     """
 
     return GET_RECIPE_BQ
+
+def get_ccs_performed_with_missing_denormalized_recipes(project_id: str, job_config):
+    get_ccs_with_denormalized_recipe = f"""
+        SELECT 
+            business_unit_id, 
+            site_id, 
+            cc_id, 
+            status_date as submitted_date
+        FROM 
+            {project_id}.tvc_cycle_count.cycle_count_status
+        WHERE denormalized_recipe_id in unnest(@denormalized_recipe_ids)
+                and status = 'SUBMITTED'
+        QUALIFY ROW_NUMBER() OVER(PARTITION BY business_unit_id, cc_id order by status_date desc)=1
+    """
+
+    return read_bq_to_polars(get_ccs_with_denormalized_recipe, job_config)
 
 
 def load_config(env):
@@ -229,6 +247,20 @@ def parse_args(parser):
         choices=["stg", "prod"],
         required=True,
         help="Target environment.",
+    )
+
+    group = parser.add_mutually_exclusive_group(required=True)
+
+    group.add_argument(
+        "-gcl",
+        "--generate-cc-list-file",
+        action="store_true",
+    )
+
+    group.add_argument(
+        "-imr",
+        "--insert-missing-recipe",
+        action="store_true",
     )
 
     parser.add_argument(
@@ -616,6 +648,7 @@ def main():
     logger.info(f"discrepancies stored to {discrepancy_file_name}")
 
     recipe_bq_insertion_list = []
+
     for row in discrepancy.iter_rows(named=True):
         rec_payload = row['recipe_payload']
         rec_payload_dict = json.loads(rec_payload)
@@ -625,25 +658,43 @@ def main():
         recipe_bq_insertion_list.append(json.dumps(rec_pl))
 
     if recipe_bq_insertion_list:
-        with open(f"/tmp/{file_name}", "w") as f:
-            f.write("\n".join(recipe_bq_insertion_list))
-
-        logger.info(f"JSONL load file for missing recipes stored to /tmp/{file_name}")
-        if should_insert_through_local_file:
-            logger.info(f"Uploading recipe jsonl file to bucket: {args.bucket_name} and file: {file_name}")
-            upload_to_gcs(
-                project_id=project_id,
-                bucket_name=args.bucket_name,
-                local_file_path=r"/tmp/" + file_name,
-                destination_blob_name=file_name,
+        if args.generate_cc_list_file:
+            denormalized_recipe_ids = discrepancy['denormalized_recipe_id'].to_list()
+            cc_job_config = bigquery.QueryJobConfig(
+                query_parameters = [
+                    bigquery.ArrayQueryParameter(
+                        "denormalized_recipe_ids",
+                        "STRING",
+                        denormalized_recipe_ids
+                    )
+                ]
             )
-            logger.info(f"GCS file upload completed")
+            cc_df = get_ccs_performed_with_missing_denormalized_recipes(project_id, cc_job_config)
+            logger.info(f"Total cc identified with missing denormalized recipe ids: {cc_df.shape}")
+            path = Path(execution_time)
+            path.mkdir(parents=True, exist_ok=True)
+            cc_df.write_csv(f"{path}/{execution_time}_cc_list.csv")
 
-            load_nested_json(project_id, False, file_name, bucket_name=args.bucket_name)
-        else:
-            logger.info("taking local jsonl file for loading into BQ")
-            load_nested_json(project_id, True, file_name, None)
-            logger.info("Completed")
+        elif args.insert_missing_recipe:
+            with open(f"/tmp/{file_name}", "w") as f:
+                f.write("\n".join(recipe_bq_insertion_list))
+
+            logger.info(f"JSONL load file for missing recipes stored to /tmp/{file_name}")
+            if should_insert_through_local_file:
+                logger.info(f"Uploading recipe jsonl file to bucket: {args.bucket_name} and file: {file_name}")
+                upload_to_gcs(
+                    project_id=project_id,
+                    bucket_name=args.bucket_name,
+                    local_file_path=r"/tmp/" + file_name,
+                    destination_blob_name=file_name,
+                )
+                logger.info(f"GCS file upload completed")
+
+                load_nested_json(project_id, False, file_name, bucket_name=args.bucket_name)
+            else:
+                logger.info("taking local jsonl file for loading into BQ")
+                load_nested_json(project_id, True, file_name, None)
+                logger.info("Completed")
     else:
         logger.info("Nothing to upload")
 
